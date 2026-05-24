@@ -150,22 +150,79 @@ export const logout = async (req: Request, res: Response) => {
 // GET /api/auth/verify-email/:token
 export const verifyEmail = async (req: Request, res: Response) => {
   try {
-    const { token } = req.params;
-    const user = await User.findOne({
+    // Accept token from path param or query param and be tolerant to minor encoding issues
+    const rawToken = (req.params.token || req.query.token || '').toString();
+    const token = rawToken.trim();
+
+    console.log(`[verifyEmail] incoming token: "${rawToken}"`);
+
+    // Try direct lookup first
+    let user = await User.findOne({
       emailVerificationToken: token,
       emailVerificationExpires: { $gt: new Date() },
     });
 
-    if (!user) return res.status(400).json({ message: 'Invalid or expired token' });
+    // If not found, try decodeURIComponent (in case token was encoded differently)
+    if (!user && rawToken) {
+      try {
+        const decoded = decodeURIComponent(rawToken);
+        if (decoded !== rawToken) {
+          console.log('[verifyEmail] trying decoded token');
+          user = await User.findOne({
+            emailVerificationToken: decoded,
+            emailVerificationExpires: { $gt: new Date() },
+          });
+        }
+      } catch (e) {
+        console.log('[verifyEmail] decodeURIComponent failed', e);
+      }
+    }
+
+    // If still not found, log potential causes and return failure
+    if (!user) {
+      console.log('[verifyEmail] token lookup failed. Token:', token);
+      // Helpful diagnostic: search for any user that has a similar token prefix (first 8 chars)
+      if (token && token.length >= 8) {
+        const prefix = token.slice(0, 8);
+        const maybe = await User.findOne({ emailVerificationToken: { $regex: `^${prefix}` } }).select('email emailVerificationToken emailVerificationExpires');
+        if (maybe) console.log('[verifyEmail] found user with matching prefix:', maybe.email, maybe.emailVerificationToken?.slice(0, 16), maybe.emailVerificationExpires);
+      }
+
+      return res.status(400).json({ message: 'Invalid or expired token' });
+    }
 
     user.isEmailVerified = true;
     user.emailVerificationToken = undefined;
     user.emailVerificationExpires = undefined;
     await user.save();
 
+    console.log('[verifyEmail] successfully verified:', user.email);
+
     res.json({ message: 'Email verified successfully' });
   } catch (err) {
     res.status(500).json({ message: 'Verification failed' });
+  }
+};
+
+// POST /api/auth/resend-verification
+export const resendVerification = async (req: Request, res: Response) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ message: 'Email is required' });
+
+    const user = await User.findOne({ email });
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    if (user.isEmailVerified) return res.status(400).json({ message: 'Email already verified' });
+
+    const verificationToken = crypto.randomBytes(32).toString('hex');
+    user.emailVerificationToken = verificationToken;
+    user.emailVerificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    await user.save();
+
+    await sendVerificationEmail(email, verificationToken);
+    res.json({ message: 'Verification email sent' });
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to resend verification' });
   }
 };
 

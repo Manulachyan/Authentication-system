@@ -6,6 +6,7 @@ import {
   logout,
   refreshToken,
   verifyEmail,
+  resendVerification,
   forgotPassword,
   resetPassword,
   verify2FA,
@@ -23,6 +24,7 @@ router.post('/login', authLimiter, login);
 router.post('/logout', authenticate, logout);
 router.post('/refresh', refreshToken);
 router.get('/verify-email/:token', verifyEmail);
+router.post('/resend-verification', authLimiter, resendVerification);
 router.post('/forgot-password', authLimiter, forgotPassword);
 router.post('/reset-password/:token', authLimiter, resetPassword);
 router.post('/2fa/verify', authLimiter, verify2FA);
